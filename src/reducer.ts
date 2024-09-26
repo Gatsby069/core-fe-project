@@ -1,6 +1,5 @@
-import {connectRouter, RouterState} from "connected-react-router";
-import {History} from "history";
-import {Action as ReduxAction, combineReducers, Reducer} from "redux";
+import {type RouterState} from "redux-first-history";
+import {combineReducers, type Action as ReduxAction, type Reducer} from "redux";
 import {DEFAULT_IDLE_TIMEOUT} from "./util/IdleDetector";
 
 // Redux State
@@ -17,7 +16,7 @@ export interface State {
     loading: LoadingState;
     router: RouterState;
     navigationPrevented: boolean;
-    app: object;
+    app: Record<string, any>;
     idle: IdleState;
 }
 
@@ -143,9 +142,9 @@ export function idleReducer(state: IdleState = {timeout: DEFAULT_IDLE_TIMEOUT, s
 }
 
 // Root Reducer
-export function rootReducer(history: History): Reducer<State> {
+export function rootReducer(routerReducer: Reducer<RouterState>): Reducer<State> {
     return combineReducers<State>({
-        router: connectRouter(history),
+        router: routerReducer,
         loading: loadingReducer,
         app: setStateReducer,
         navigationPrevented: navigationPreventionReducer,

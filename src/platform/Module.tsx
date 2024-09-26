@@ -1,29 +1,32 @@
-import {push} from "connected-react-router";
-import {Location} from "history";
-import {SagaGenerator} from "../typed-saga";
+import {push} from "redux-first-history";
 import {put} from "redux-saga/effects";
-import {produce, enablePatches, enableES5} from "immer";
+import {produce, enablePatches} from "immer";
 import {app} from "../app";
-import {Logger} from "../Logger";
-import {TickIntervalDecoratorFlag} from "../module";
-import {navigationPreventionAction, setStateAction, State} from "../reducer";
+import {navigationPreventionAction, setStateAction, type State} from "../reducer";
+import type {Location} from "history";
+import type {TickIntervalDecoratorFlag} from "../module";
+import type {SagaGenerator} from "../typed-saga";
+import type {Logger} from "../Logger";
 
-enableES5();
-if (process.env.NODE_ENV === "development") {
-    enablePatches();
-}
+if (process.env.NODE_ENV === "development") enablePatches();
 
 export type ModuleLocation<State> = Location<Readonly<State> | undefined>;
 
 export interface ModuleLifecycleListener<RouteParam extends object = object, HistoryState extends object = object> {
     onEnter: (entryComponentProps?: any) => SagaGenerator;
     onDestroy: () => SagaGenerator;
-    onLocationMatched: (routeParameters: RouteParam, location: Location<Readonly<HistoryState> | undefined>) => SagaGenerator;
+    onLocationMatched: (routeParameters: RouteParam, location: ModuleLocation<HistoryState>) => SagaGenerator;
+    onPathnameMatched: (routeParameters: RouteParam, location: Location<Readonly<HistoryState> | undefined>) => SagaGenerator;
     onTick: (() => SagaGenerator) & TickIntervalDecoratorFlag;
 }
 
-export class Module<RootState extends State, ModuleName extends keyof RootState["app"] & string, RouteParam extends object = object, HistoryState extends object = object> implements ModuleLifecycleListener<RouteParam, HistoryState> {
-    constructor(readonly name: ModuleName, readonly initialState: RootState["app"][ModuleName]) {}
+export class Module<RootState extends State, ModuleName extends keyof RootState["app"] & string, RouteParam extends object = object, HistoryState extends object = object>
+    implements ModuleLifecycleListener<RouteParam, HistoryState>
+{
+    constructor(
+        readonly name: ModuleName,
+        readonly initialState: RootState["app"][ModuleName]
+    ) {}
 
     *onEnter(entryComponentProps: any): SagaGenerator {
         /**
@@ -41,6 +44,13 @@ export class Module<RootState extends State, ModuleName extends keyof RootState[
         /**
          * Called when the attached component is a React-Route component and its Route location matches
          * It is called each time the location changes, as long as it still matches
+         */
+    }
+
+    *onPathnameMatched(routeParam: RouteParam, location: ModuleLocation<HistoryState>): SagaGenerator {
+        /**
+         * Called when the attached component is a React-Route component and its Route location pathname matches
+         * It is called each time the location pathname changes, as long as it still matches
          */
     }
 
@@ -68,21 +78,23 @@ export class Module<RootState extends State, ModuleName extends keyof RootState[
         app.store.dispatch(navigationPreventionAction(isPrevented));
     }
 
-    setState<K extends keyof RootState["app"][ModuleName]>(stateOrUpdater: ((state: RootState["app"][ModuleName]) => void) | Pick<RootState["app"][ModuleName], K> | RootState["app"][ModuleName]): void {
+    setState<K extends keyof RootState["app"][ModuleName]>(
+        stateOrUpdater: ((state: RootState["app"][ModuleName]) => void) | Pick<RootState["app"][ModuleName], K> | RootState["app"][ModuleName]
+    ): void {
         if (typeof stateOrUpdater === "function") {
             const originalState = this.state;
             const updater = stateOrUpdater as (state: RootState["app"][ModuleName]) => void;
             let patchDescriptions: string[] | undefined;
             const newState = produce<Readonly<RootState["app"][ModuleName]>, RootState["app"][ModuleName]>(
                 originalState,
-                (draftState) => {
+                draftState => {
                     // Wrap into a void function, in case updater() might return anything
                     updater(draftState);
                 },
                 process.env.NODE_ENV === "development"
-                    ? (patches) => {
+                    ? patches => {
                           // No need to read "op", in will only be "replace"
-                          patchDescriptions = patches.map((_) => _.path.join("."));
+                          patchDescriptions = patches.map(_ => _.path.join("."));
                       }
                     : undefined
             );
@@ -122,7 +134,7 @@ export class Module<RootState extends State, ModuleName extends keyof RootState[
         if (typeof urlOrState === "string") {
             const url: string = urlOrState;
             if (state) {
-                yield put(push(url, state === "keep-state" ? app.browserHistory.location.state : state));
+                yield put(push(url, state === "keep-state" ? app.history.location.state : state));
             } else {
                 yield put(push(url));
             }

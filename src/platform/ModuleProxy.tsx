@@ -1,17 +1,21 @@
 import React from "react";
-import {RouteComponentProps} from "react-router";
-import {Task} from "redux-saga";
-import {delay, call as rawCall, take, select, cancel, fork} from "redux-saga/effects";
+import {delay, call as rawCall, take, select, cancel, fork, call, put} from "redux-saga/effects";
 import {app} from "../app";
-import {ActionCreators, executeAction} from "../module";
-import {IDLE_STATE_ACTION, navigationPreventionAction, State} from "../reducer";
-import {Module, ModuleLifecycleListener} from "./Module";
-import {Location} from "history";
+import {executeAction, type ActionCreators} from "../module";
+import {IDLE_STATE_ACTION, navigationPreventionAction, type State} from "../reducer";
+import {Module, type ModuleLifecycleListener} from "./Module";
+import type {Location} from "history";
+import type {RouteComponentProps} from "react-router";
+import type {Task} from "redux-saga";
 
 let startupModuleName: string | null = null;
 
 export class ModuleProxy<M extends Module<any, any>> {
-    constructor(private module: M, private actions: ActionCreators<M>) {}
+    constructor(
+        private module: M,
+        private actions: ActionCreators<M>,
+        private moduleName: string
+    ) {}
 
     getActions(): ActionCreators<M> {
         return this.actions;
@@ -54,6 +58,36 @@ export class ModuleProxy<M extends Module<any, any>> {
                  *  Do not use !== to compare locations.
                  *  Because in "connected-react-router", location from rootState.router.location is not equal to current history.location in reference.
                  */
+                if (currentLocation && currentRouteParams && !this.areLocationsPathNameEqual(currentLocation, prevLocation) && this.hasOwnLifecycle("onPathnameMatched")) {
+                    try {
+                        this.lastDidUpdateSagaTask?.cancel();
+                    } catch (e) {
+                        // In rare case, it may throw error, just ignore
+                    }
+                    this.lastDidUpdateSagaTask = app.sagaMiddleware.run(function* () {
+                        const action = `${moduleName}/@@PATHNAME_MATCHED`;
+                        const startTime = Date.now();
+                        yield rawCall(executeAction, action, lifecycleListener.onPathnameMatched.bind(lifecycleListener), currentRouteParams, currentLocation);
+                        app.logger.info({
+                            action,
+                            elapsedTime: Date.now() - startTime,
+                            info: {
+                                // URL params should not contain any sensitive or complicated objects
+                                route_params: JSON.stringify(currentRouteParams),
+                                history_state: JSON.stringify(currentLocation.state),
+                            },
+                        });
+                    });
+                    app.store.dispatch(navigationPreventionAction(false));
+                }
+
+                /**
+                 * Only trigger onLocationMatched if current component is connected to <Route>, and location literally changed.
+                 *
+                 * CAVEAT:
+                 *  Do not use !== to compare locations.
+                 *  Because in "connected-react-router", location from rootState.router.location is not equal to current history.location in reference.
+                 */
                 if (currentLocation && currentRouteParams && !this.areLocationsEqual(currentLocation, prevLocation) && this.hasOwnLifecycle("onLocationMatched")) {
                     try {
                         this.lastDidUpdateSagaTask?.cancel();
@@ -61,6 +95,7 @@ export class ModuleProxy<M extends Module<any, any>> {
                         // In rare case, it may throw error, just ignore
                     }
                     this.lastDidUpdateSagaTask = app.sagaMiddleware.run(function* () {
+                        yield put({type: `@@${moduleName}/@@cancel-saga`});
                         const action = `${moduleName}/@@LOCATION_MATCHED`;
                         const startTime = Date.now();
                         yield rawCall(executeAction, action, lifecycleListener.onLocationMatched.bind(lifecycleListener), currentRouteParams, currentLocation);
@@ -89,11 +124,15 @@ export class ModuleProxy<M extends Module<any, any>> {
                     app.store.dispatch(navigationPreventionAction(false));
                 }
 
+                app.sagaMiddleware.run(function* () {
+                    yield put({type: `@@${moduleName}/@@cancel-saga`});
+                });
+
                 app.logger.info({
                     action: `${moduleName}/@@DESTROY`,
-                    info: {
-                        tick_count: this.tickCount.toString(),
-                        staying_second: ((Date.now() - this.mountedTime) / 1000).toFixed(2),
+                    stats: {
+                        tick_count: this.tickCount,
+                        staying_second: (Date.now() - this.mountedTime) / 1000,
                     },
                 });
 
@@ -111,6 +150,10 @@ export class ModuleProxy<M extends Module<any, any>> {
 
             private areLocationsEqual = (a: Location, b: Location): boolean => {
                 return a.pathname === b.pathname && a.search === b.search && a.hash === b.hash && a.key === b.key && a.state === b.state;
+            };
+
+            private areLocationsPathNameEqual = (a: Location, b: Location): boolean => {
+                return a.pathname === b.pathname;
             };
 
             private hasOwnLifecycle = (methodName: keyof ModuleLifecycleListener): boolean => {
@@ -137,6 +180,25 @@ export class ModuleProxy<M extends Module<any, any>> {
                         component_props: JSON.stringify(props),
                     },
                 });
+
+                if (this.hasOwnLifecycle("onPathnameMatched")) {
+                    if ("match" in props && "location" in props) {
+                        const initialRenderActionName = `${moduleName}/@@PATHNAME_MATCHED`;
+                        const startTime = Date.now();
+                        const routeParams = props.match.params;
+                        yield rawCall(executeAction, initialRenderActionName, lifecycleListener.onPathnameMatched.bind(lifecycleListener), routeParams, props.location);
+                        app.logger.info({
+                            action: initialRenderActionName,
+                            elapsedTime: Date.now() - startTime,
+                            info: {
+                                route_params: JSON.stringify(props.match.params),
+                                history_state: JSON.stringify(props.location.state),
+                            },
+                        });
+                    } else {
+                        console.error(`[framework] Module component [${moduleName}] is non-route, use onEnter() instead of onPathnameMatched()`);
+                    }
+                }
 
                 if (this.hasOwnLifecycle("onLocationMatched")) {
                     if ("match" in props && "location" in props) {
@@ -193,6 +255,7 @@ export class ModuleProxy<M extends Module<any, any>> {
 }
 
 function createStartupPerformanceLog(actionName: string): void {
+    // TODO: use new API
     if (window.performance && performance.timing) {
         // For performance timing API, please refer: https://www.w3.org/blog/2012/09/performance-timing-information/
         const now = Date.now();

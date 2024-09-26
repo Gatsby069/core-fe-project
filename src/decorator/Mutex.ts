@@ -1,6 +1,6 @@
 import {app} from "../app";
 import createPromiseMiddleware from "../createPromiseMiddleware";
-import {createActionHandlerDecorator} from "./index";
+import {createActionHandlerDecorator} from "./createActionHandlerDecorator";
 
 /**
  * If specified, the action cannot be entered by other sagas during execution.
@@ -12,10 +12,8 @@ export function Mutex() {
         if (lockTime) {
             thisModule.logger.info({
                 action: handler.actionName,
-                info: {
-                    payload: handler.maskedParams,
-                    mutex_locked_duration: (Date.now() - lockTime).toString(),
-                },
+                info: {payload: handler.maskedParams},
+                stats: {mutex_locked_duration: Date.now() - lockTime},
             });
         } else {
             const {resolve} = createPromiseMiddleware();

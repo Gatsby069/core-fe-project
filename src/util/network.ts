@@ -1,8 +1,14 @@
-import axios, {AxiosError, AxiosRequestConfig, Method} from "axios";
+import axios, {AxiosError, type AxiosInterceptorManager, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig, type Method} from "axios";
 import {APIException, NetworkConnectionException} from "../Exception";
 import {parseWithDate} from "./json-util";
 
-export type PathParams<T extends string> = string extends T ? {[key: string]: string | number} : T extends `${infer Start}:${infer Param}/${infer Rest}` ? {[k in Param | keyof PathParams<Rest>]: string | number} : T extends `${infer Start}:${infer Param}` ? {[k in Param]: string | number} : {};
+export type PathParams<T extends string> = string extends T
+    ? {[key: string]: string | number}
+    : T extends `${infer Start}:${infer Param}/${infer Rest}`
+      ? {[k in Param | keyof PathParams<Rest>]: string | number}
+      : T extends `${infer Start}:${infer Param}`
+        ? {[k in Param]: string | number}
+        : {};
 
 export interface APIErrorResponse {
     id?: string | null;
@@ -27,15 +33,15 @@ const ajaxClient = axios.create({
 });
 
 ajaxClient.interceptors.response.use(
-    (response) => response,
-    (error) => {
+    response => response,
+    error => {
         if (axios.isAxiosError(error)) {
             const typedError = error as AxiosError<APIErrorResponse | undefined>;
-            const requestURL = typedError.config.url || "-";
+            const requestURL = typedError.config?.url || "-";
 
             if (typedError.response) {
                 const responseData = typedError.response.data;
-                // Treat "cloud" error as Network Exception, e.g: gateway/load balancer issue,
+                // Treat "cloud" error as Network Exception, e.g: gateway/load balancer issue
                 const networkErrorStatusCodes: number[] = [0, 502, 504];
                 if (responseData && !networkErrorStatusCodes.includes(typedError.response.status)) {
                     // Try to get server error message/ID/code from response
@@ -55,7 +61,13 @@ ajaxClient.interceptors.response.use(
     }
 );
 
-export async function ajax<Request, Response, Path extends string>(method: Method, path: Path, pathParams: PathParams<Path>, request: Request, extraConfig: Partial<AxiosRequestConfig> = {}): Promise<Response> {
+export async function ajax<Request, Response, Path extends string>(
+    method: Method,
+    path: Path,
+    pathParams: PathParams<Path>,
+    request: Request,
+    extraConfig: Partial<AxiosRequestConfig> = {}
+): Promise<Response> {
     const fullURL = urlParams(path, pathParams);
     const config: AxiosRequestConfig = {...extraConfig, method, url: fullURL};
 
@@ -66,6 +78,7 @@ export async function ajax<Request, Response, Path extends string>(method: Metho
     }
 
     config.headers = {
+        ...extraConfig.headers,
         "Content-Type": "application/json",
         Accept: "application/json",
     };
@@ -90,3 +103,11 @@ export function urlParams(pattern: string, params: object): string {
     });
     return url;
 }
+
+export const setAjaxRequestInterceptor: AxiosInterceptorManager<InternalAxiosRequestConfig>["use"] = (onFulfilled, onRejected?, options?) => {
+    return ajaxClient.interceptors.request.use(onFulfilled, onRejected, options);
+};
+
+export const setAjaxResponseInterceptor: AxiosInterceptorManager<AxiosResponse>["use"] = (onFulfilled?, onRejected?, options?) => {
+    return ajaxClient.interceptors.response.use(onFulfilled, onRejected, options);
+};

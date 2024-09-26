@@ -1,4 +1,6 @@
-const chalk = require("chalk");
+/* eslint-env node */
+/* eslint-disable @typescript-eslint/no-var-requires */
+
 const childProcess = require("child_process");
 const fs = require("fs-extra");
 
@@ -10,15 +12,15 @@ function spawn(command, args, errorMessage, options) {
         process.exit(1);
     }
     if (result.status !== 0) {
-        console.error(chalk`{red.bold ${errorMessage}}`);
+        console.error(errorMessage);
         console.error(`non-zero exit code returned, code=${result.status}, command=${command} ${args.join(" ")}`);
         process.exit(1);
     }
 }
 
 function publish() {
-    fs.copySync("./.npmrc", "build/dist/.npmrc", {dereference: true});
-    return spawn("npm", ["publish", "--registry=https://pkgs.dev.azure.com/foodtruckinc/Wonder/_packaging/npm-local/npm/registry/"], "publish failed, please fix", {cwd: "build/dist"});
+    console.info("distribute ...");
+    return spawn("npm", ["publish", "--registry=https://pkgs.dev.azure.com/foodtruckinc/Wonder/_packaging/npm-local/npm/registry/"], "publish failed, please fix");
 }
 
 publish();

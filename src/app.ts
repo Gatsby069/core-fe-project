@@ -1,21 +1,21 @@
-import {routerMiddleware} from "connected-react-router";
-import {createBrowserHistory, History} from "history";
-import {applyMiddleware, compose, createStore, Store, StoreEnhancer} from "redux";
-import createSagaMiddleware, {SagaMiddleware} from "redux-saga";
-import {takeEvery} from "redux-saga/effects";
-import {Logger, LoggerConfig, LoggerImpl} from "./Logger";
-import {ActionHandler, ErrorHandler, executeAction} from "./module";
-import {Action, LOADING_ACTION, rootReducer, State} from "./reducer";
+import {createBrowserHistory, type History} from "history";
+import {applyMiddleware, compose, createStore, type Store, type StoreEnhancer} from "redux";
+import {createReduxHistoryContext} from "redux-first-history";
+import createSagaMiddleware, {type SagaMiddleware} from "redux-saga";
+import {call as rawCall, race as rawRace, take, takeEvery} from "redux-saga/effects";
+import {type Logger, type LoggerConfig, LoggerImpl} from "./Logger";
+import {type ActionHandler, type ErrorHandler, executeAction} from "./module";
+import {type Action, LOADING_ACTION, rootReducer, type State} from "./reducer";
 import {captureError} from "./util/error-util";
 import createPromiseMiddleware from "./createPromiseMiddleware";
 
 declare const window: any;
 
 interface App {
-    readonly browserHistory: History;
+    readonly history: History;
     readonly store: Store<State>;
     readonly sagaMiddleware: SagaMiddleware<any>;
-    readonly actionHandlers: {[actionType: string]: ActionHandler};
+    readonly actionHandlers: {[actionType: string]: {handler: ActionHandler; moduleName: string}};
     readonly logger: LoggerImpl;
     loggerConfig: LoggerConfig | null;
     errorHandler: ErrorHandler;
@@ -41,27 +41,38 @@ function composeWithDevTools(enhancer: StoreEnhancer): StoreEnhancer {
 
 function createApp(): App {
     const {middleware: promiseMiddleware, map} = createPromiseMiddleware();
-    const browserHistory = createBrowserHistory();
-    const eventLogger = new LoggerImpl();
+    const {createReduxHistory, routerMiddleware, routerReducer} = createReduxHistoryContext({
+        history: createBrowserHistory(),
+    });
     const sagaMiddleware = createSagaMiddleware({
         onError: (error, info) => captureError(error, "@@framework/detached-saga", {extraStacktrace: info.sagaStack}),
     });
-    const store: Store<State> = createStore(rootReducer(browserHistory), composeWithDevTools(applyMiddleware(routerMiddleware(browserHistory), sagaMiddleware, promiseMiddleware)));
+    const store: Store<State> = createStore(rootReducer(routerReducer), composeWithDevTools(applyMiddleware(routerMiddleware, sagaMiddleware, promiseMiddleware)));
+
+    // createReduxHistory() will dispatch an action, it must be called before middleware takeEvery(*) takes effect
+    const reduxHistory = createReduxHistory(store);
+
     sagaMiddleware.run(function* () {
         yield takeEvery("*", function* (action: Action<any>) {
-            const handler = app.actionHandlers[action.type];
-            if (handler) {
-                yield* executeAction(action.type, handler, ...action.payload);
+            const actionHandler = app.actionHandlers[action.type];
+            if (actionHandler) {
+                const {handler, moduleName} = actionHandler;
+                // Cancel all saga when related module destroy
+                // @see https://stackoverflow.com/a/45806187
+                yield rawRace({
+                    task: rawCall(executeAction, action.type, handler, ...action.payload),
+                    cancel: take(`@@${moduleName}/@@cancel-saga`),
+                });
             }
         });
     });
 
     return {
-        browserHistory,
+        history: reduxHistory,
         store,
         sagaMiddleware,
         actionHandlers: {},
-        logger: eventLogger,
+        logger: new LoggerImpl(),
         loggerConfig: null,
         *errorHandler() {},
         actionMap: map,
